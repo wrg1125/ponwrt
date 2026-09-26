@@ -72,7 +72,16 @@ jobs:
           echo "使用 manifest: $man"
           echo "── daed ──";   grep -i daed "$man" || echo "MISSING daed!"
           echo "── PHY fw ──"; grep -i en8811 "$man" || echo "MISSING en8811h firmware!"
+          echo "── RTL ──";     grep -iE 'rtl8261|rtl826x' "$man" || echo "MISSING rtl firmware!"
           echo "── voice ──";  grep -i -E 'voice|pcm-spi|slic' "$man" || echo "(no voice — 符合预期)"
+          echo "── squashfs 内实文件探测 ──"
+          python3 - <<'PYX'
+import struct
+f=open("$(find bin/targets/airoha/an7581 -name '*gemtek_xg2010g*squashfs-sysupgrade.itb' | head -1)","rb").read()
+i=f.find(b"hsqs"); sz=struct.unpack("<Q", f[i+0x30:i+0x38])[0]; root=f[i:i+sz]
+for n in [b"rtl8261n.bin", b"rtl8261c.bin", b"EthMD32.dm.bin", b"EthMD32.DSP.bin"]:
+    print(n.decode(), "->", "IN IMAGE" if root.count(n) else "NOT FOUND")
+PYX
 
       - name: Pack xg2010g images
         run: |
