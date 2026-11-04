@@ -53,10 +53,29 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Apply MBI RX overrun -> MAC epoch reset patch (pbs05/ponwrt#49)
+        run: |
+          set -e
+          cd feeds/pon_drivers/airoha-xpon
+          ( cd src && git apply -p1 --verbose "$GITHUB_WORKSPACE/build/mbi-reset.patch" )
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=69/" Makefile
+          echo "── PKG_RELEASE ──"; grep '^PKG_RELEASE' Makefile
+          echo "── 补丁标记 (应为 2 / 1) ──"
+          grep -c mbi_reset_pending src/airoha-xpon-private.h
+          grep -c 'MBI RX overrun storm' src/airoha-xpon-main.c
+
       - name: Configure an7581
         run: |
           ./scripts/kconfig.pl + "configs/an7581.config" configs/release.config > .config
+          # 只编 gemtek_xg2010g, 其余 an7581 设备全关 (省一半以上构建时间)
+          sed -i -E '/gemtek_xg2010g/!s/^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_([A-Za-z0-9_.+-]+)=y$/# CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_\1 is not set/' .config
           make defconfig
+          echo "── 本次构建的设备 ──"
+          grep -E '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_[A-Za-z0-9_.+-]+=y$' .config
+          echo "── dae/daed 是否被选中 (不该有输出) ──"
+          grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|daed|luci-app-dae|luci-app-daede)=y$' .config || echo "OK: dae/daed 全部关闭"
+          echo "── dae 依赖是否保留 (应有输出) ──"
+          grep -E '^CONFIG_(PACKAGE_(kmod-sched-core|kmod-sched-bpf|kmod-veth|kmod-inet-diag|kmod-netlink-diag|kmod-xdp-sockets-diag|v2ray-geoip|v2ray-geosite|ca-bundle)|KERNEL_(XDP_SOCKETS|BPF_SYSCALL|BPF_JIT|BPF_EVENTS|DEBUG_INFO_BTF))=y$' .config
 
       - name: Inject personalization from secrets
         env:
@@ -77,7 +96,18 @@ jobs:
           [ -n "$man" ] || man=$(find bin/targets/airoha/an7581 -name '*.manifest' | head -1)
           [ -n "$man" ] || { echo "manifest not found"; find bin/targets -maxdepth 3 | head -30; exit 1; }
           echo "使用 manifest: $man"
-          echo "── dae ──";  grep -E "^(dae|dae-geoip|dae-geosite|luci-app-dae) " "$man" || echo "MISSING dae!"
+          echo "── dae/daed (本版应缺失) ──"
+          if grep -qE "^(dae|dae-geoip|dae-geosite|daed|luci-app-daede)[[:space:]]" "$man"; then
+            echo "ERROR: dae/daed 仍在镜像里"; exit 1
+          else
+            echo "OK: dae/daed 未安装"
+          fi
+          echo "── dae/daed 依赖 (本版应存在) ──"
+          for p in kmod-sched-core kmod-sched-bpf kmod-veth kmod-inet-diag kmod-netlink-diag kmod-xdp-sockets-diag v2ray-geoip v2ray-geosite ca-bundle; do
+            grep -qE "^$p[[:space:]]" "$man" && echo "  OK   $p" || { echo "  MISS $p"; exit 1; }
+          done
+          echo "── airoha-xpon (应为 r69 = 带补丁) ──"
+          grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
           echo "── adguardhome ──"; grep -E "^(adguardhome|luci-app-adguardhome) " "$man" || echo "MISSING adguardhome!"
           echo "── PHY fw ──"; grep -E "^(airoha-en8811h-firmware|rtl826x-firmware|rtl8261c-firmware) " "$man" || echo "MISSING PHY fw!"
           echo "── PON ──";  grep -E "^(kmod-airoha-xpon|airoha-pon|luci-app-pon)" "$man" || echo "MISSING PON!"
