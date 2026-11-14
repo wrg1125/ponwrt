@@ -133,7 +133,7 @@ jobs:
           echo "── airoha-xpon (应为 r69 = 带补丁) ──"
           grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
           echo "── honk 二进制 (files/ 覆盖层，不在 manifest 里) ──"
-          BIN=$(find build_dir/target-*/root-* -maxdepth 4 -type f -name honk 2>/dev/null | head -1)
+          BIN=$(ls -1 build_dir/target-*/root-*/usr/bin/honk 2>/dev/null | head -1)
           if [ -n "$BIN" ]; then echo "  OK $BIN ($(stat -c%s "$BIN") bytes)"; else echo "ERROR: rootfs 里没有 honk"; exit 1; fi
           grep -E "^kmod-(veth|nft-queue|nft-core|nf-conntrack)[[:space:]]" "$man" || { echo "ERROR: honk 依赖缺失"; exit 1; }
           echo "── adguardhome ──"; grep -E "^(adguardhome|luci-app-adguardhome) " "$man" || echo "MISSING adguardhome!"
