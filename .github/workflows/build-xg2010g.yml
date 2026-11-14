@@ -69,8 +69,10 @@ jobs:
           ./scripts/kconfig.pl + "configs/an7581.config" configs/release.config > .config
           # 只编 gemtek_xg2010g, 其余 an7581 设备全关 (省一半以上构建时间)
           sed -i -E '/gemtek_xg2010g/!s/^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_([A-Za-z0-9_.+-]+)=y$/# CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_\1 is not set/' .config
-          # ── honk（eBPF 透明代理引擎，Rust 预编译二进制）──
-          echo "CONFIG_PACKAGE_honk=y" >> .config
+          # ── honk（二进制走 files/ 覆盖层，不用 package 机制）──
+          for k in kmod-veth kmod-nft-queue kmod-nft-core kmod-nf-conntrack; do
+            grep -q "^CONFIG_PACKAGE_$k=y" .config || echo "CONFIG_PACKAGE_$k=y" >> .config
+          done
           # honk 需要 cgroup v2 + CGROUP_BPF；NET_XGRESS 由 NET_CLS_ACT 自动选中
           sed -i 's/^# CONFIG_KERNEL_CGROUP_BPF is not set/CONFIG_KERNEL_CGROUP_BPF=y/' .config
           grep -q '^CONFIG_KERNEL_CGROUP_BPF=' .config || echo 'CONFIG_KERNEL_CGROUP_BPF=y' >> .config
@@ -79,7 +81,8 @@ jobs:
           echo "── 本次构建的设备 ──"
           grep -E '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_[A-Za-z0-9_.+-]+=y$' .config
           echo "── honk 与内核前提 ──"
-          grep -E '^CONFIG_(PACKAGE_honk|KERNEL_CGROUP_BPF|KERNEL_NET_CLS_ACT|KERNEL_BPF_SYSCALL|KERNEL_BPF_JIT)=y$' .config || { echo "ERROR: honk 相关配置缺失"; exit 1; }
+          grep -E '^CONFIG_(KERNEL_CGROUP_BPF|KERNEL_NET_CLS_ACT|KERNEL_BPF_SYSCALL|KERNEL_BPF_JIT)=y$' .config
+          grep -E '^CONFIG_PACKAGE_kmod-(veth|nft-queue|nft-core|nf-conntrack)=y$' .config || { echo "ERROR: honk 依赖 kmod 缺失"; exit 1; }
           echo "── dae/daed 是否被选中 (不该有输出) ──"
           grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|daed|luci-app-dae|luci-app-daede)=y$' .config || echo "OK: dae/daed 全部关闭"
           echo "── dae 依赖是否保留 (应有输出) ──"
@@ -93,10 +96,17 @@ jobs:
           HONK_NODE: ${{ secrets.HONK_NODE }}
         run: bash scripts/wrg1125-inject.sh
 
-      - name: DEBUG honk prepare
+      - name: Fetch honk binary into files/ overlay
         run: |
-          make package/honk/download V=s 2>&1 | tail -25 || true
-          make package/honk/prepare V=s 2>&1 | tail -60 || true
+          set -e
+          URL="https://github.com/daeuniverse/honk/releases/download/v0.1.0-beta.6/honk-core-v0.1.0-beta.6-aarch64-unknown-linux-musl-stock-clash-api.tar.gz"
+          curl -sSL -o /tmp/honk.tgz "$URL"
+          echo "e33320460ed1cda83b21cfc3a0551769a1a250c0aeeda5824e92f18d322fb69e  /tmp/honk.tgz" | sha256sum -c -
+          mkdir -p files/usr/bin
+          tar -C /tmp -xzf /tmp/honk.tgz
+          install -Dm755 /tmp/honk-core-v0.1.0-beta.6-aarch64-unknown-linux-musl-stock-clash-api/honk-core files/usr/bin/honk
+          ls -lh files/usr/bin/honk
+          file files/usr/bin/honk | head -1
 
       - name: Download sources
         run: make download -j"$(nproc)"
@@ -122,8 +132,9 @@ jobs:
           done
           echo "── airoha-xpon (应为 r69 = 带补丁) ──"
           grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
-          echo "── honk (本版应存在) ──"
-          grep -E "^honk[[:space:]]" "$man" || { echo "ERROR: honk 未进镜像"; exit 1; }
+          echo "── honk 二进制 (files/ 覆盖层，不在 manifest 里) ──"
+          BIN=$(find build_dir/target-*/root-* -maxdepth 4 -type f -name honk 2>/dev/null | head -1)
+          if [ -n "$BIN" ]; then echo "  OK $BIN ($(stat -c%s "$BIN") bytes)"; else echo "ERROR: rootfs 里没有 honk"; exit 1; fi
           grep -E "^kmod-(veth|nft-queue|nft-core|nf-conntrack)[[:space:]]" "$man" || { echo "ERROR: honk 依赖缺失"; exit 1; }
           echo "── adguardhome ──"; grep -E "^(adguardhome|luci-app-adguardhome) " "$man" || echo "MISSING adguardhome!"
           echo "── PHY fw ──"; grep -E "^(airoha-en8811h-firmware|rtl826x-firmware|rtl8261c-firmware) " "$man" || echo "MISSING PHY fw!"
