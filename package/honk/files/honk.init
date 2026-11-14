@@ -8,6 +8,8 @@ start_service() {
 	config_load honk 2>/dev/null || true
 
 	procd_open_instance
+	# geo 数据来自 v2ray-geosite / v2ray-geoip
+	procd_set_param env DAE_LOCATION_ASSET=/usr/share/v2ray
 	procd_set_param command /usr/bin/honk -c /etc/honk/config.dae --data-dir /etc/honk
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1

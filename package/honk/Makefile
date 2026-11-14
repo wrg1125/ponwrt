@@ -25,7 +25,8 @@ define Package/honk
   SUBMENU:=Web Servers/Proxies
   TITLE:=honk - eBPF transparent proxy engine (Rust, dae-compatible config)
   URL:=https://github.com/daeuniverse/honk
-  DEPENDS:=+kmod-veth +kmod-nft-queue +kmod-nft-core +kmod-nf-conntrack +kmod-sched-core
+  DEPENDS:=+kmod-veth +kmod-nft-queue +kmod-nft-core +kmod-nf-conntrack +kmod-sched-core \
+	+v2ray-geosite +v2ray-geoip
 endef
 
 define Package/honk/description
@@ -45,6 +46,7 @@ define Package/honk/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/honk-core $(1)/usr/bin/honk
 	$(INSTALL_DIR) $(1)/etc/honk
 	$(INSTALL_CONF) ./files/config.dae $(1)/etc/honk/config.dae
+	$(INSTALL_CONF) ./files/config.dae.example $(1)/etc/honk/config.dae.example
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/honk.init $(1)/etc/init.d/honk
 endef

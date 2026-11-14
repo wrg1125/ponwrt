@@ -90,6 +90,7 @@ jobs:
           PPPoE_USER: ${{ secrets.PPPOE_USER }}
           PPPoE_PASS: ${{ secrets.PPPOE_PASS }}
           ROOT_HASH: ${{ secrets.ROOT_HASH }}
+          HONK_NODE: ${{ secrets.HONK_NODE }}
         run: bash scripts/wrg1125-inject.sh
 
       - name: Download sources

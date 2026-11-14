@@ -1,0 +1,59 @@
+// honk 配置示例 —— 由现有 dae 配置直接转换（dae 语法兼容）
+// 用法：
+//   1. 把下面 node 里的 DUMMY 换成真实密码
+//   2. cp /etc/honk/config.dae.example /etc/honk/config.dae
+//   3. /etc/init.d/honk enable && /etc/init.d/honk start
+//   4. 确认 dae 已经停用（两者不能同时跑）
+//
+// 转换时的两处改动：
+//   * dae 的 `-> must_direct` honk 不支持，改成 `-> direct`
+//   * group 里的 policy 保持 min_moving_avg（写 url_test 会被静默降级）
+
+global {
+	tproxy_port: 12345
+	tproxy_port_protect: true
+	log_level: info
+	lan_interface: br-lan
+	wan_interface: pppoe-wan
+	auto_config_kernel_parameter: true
+	dial_mode: domain
+}
+
+node {
+	de: 'hysteria2://DUMMY@d.5760576.xyz:443/?sni=d.5760576.xyz'
+	jp: 'hysteria2://DUMMY@j.5760576.xyz:443/?sni=j.5760576.xyz'
+}
+
+dns {
+	upstream {
+		agh: 'udp://10.0.0.1:5300'
+		cf: 'https://cloudflare-dns.com/dns-query'
+	}
+	routing {
+		request {
+			qname(geosite:cn) -> agh
+			qtype(aaaa) && qname(geosite:geolocation-!cn) -> reject
+			fallback: cf
+		}
+	}
+}
+
+group {
+	proxy {
+		filter: name(de, jp)
+		policy: min_moving_avg
+	}
+}
+
+routing {
+	domain(j.5760576.xyz) -> direct
+	dip(129.225.183.210) -> direct
+	domain(d.5760576.xyz) -> direct
+	dip(189.24.110.203) -> direct
+	pname(NetworkManager, systemd-resolved, dnsmasq, AdGuardHome) -> direct
+	domain(geosite:category-ads-all) && domain(geosite:geolocation-!cn) -> block
+	domain(geosite:cn) -> direct
+	dip(224.0.0.0/3, 'ff00::/8') -> direct
+	dip(geoip:private, geoip:cn) -> direct
+	fallback: proxy
+}
