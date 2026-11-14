@@ -1,0 +1,40 @@
+// honk 默认配置：全直通，启用前先填 node / group 再改 routing
+// 文档: https://github.com/daeuniverse/honk/blob/main/doc/en/configuration.md
+//
+// 注意事项（实测踩过的坑）：
+//   1. XHTTP 节点必须 alpn=h2（写 h2,http/1.1 会被丢弃）
+//   2. 组策略写 min_moving_avg / score / select；写 url_test 会静默降级成 select
+//   3. nfqueue_enable 默认 true，会和同命名空间的防火墙抢队列表；本固件默认关闭
+
+global {
+	wan_interface: auto
+	log_level: info
+	dial_mode: domain
+	auto_config_kernel_parameter: true
+	nfqueue_enable: false
+	tcp_check_url: 'https://www.gstatic.com/generate_204'
+	tcp_check_http_method: HEAD
+	udp_check_dns: 'dns.google.com:53,8.8.8.8'
+	check_interval: 300s
+	check_tolerance: 30ms
+}
+
+// node {
+//     zgo: 'hysteria2://PASSWORD@d.5760576.xyz:443/?sni=d.5760576.xyz'
+//     xhttp: 'vless://UUID@d.5760576.xyz:8443?security=tls&type=xhttp&path=/stream&mode=auto&sni=d.5760576.xyz&alpn=h2'
+// }
+//
+// group {
+//     proxy {
+//         filter: name(zgo, xhttp)
+//         policy: min_moving_avg
+//         tolerance: 50
+//     }
+// }
+
+routing {
+	pname(honk) -> direct
+	dip(geoip:private) -> direct
+	dip(geoip:cn) -> direct
+	fallback: direct
+}
