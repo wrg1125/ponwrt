@@ -53,16 +53,22 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Use prebuilt honk package (skip Rust source build)
+      - name: Fetch official daeuniverse apks (honk + luci-app-honk)
         run: |
           set -e
-          test -d feeds/daeuniverse/honk
-          cp build/daeuniverse-honk-prebuilt.mk feeds/daeuniverse/honk/Makefile
-          echo "── honk Makefile 关键行 ──"
-          grep -E '^(PKG_HASH|PKG_SOURCE):=' feeds/daeuniverse/honk/Makefile
-          grep -n 'vmlinux-btf-builtin' feeds/daeuniverse/honk/Makefile
-          rm -rf package/feeds/daeuniverse/honk
-          ./scripts/feeds install honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin
+          BASE=https://openwrt.daeuniverse.org/25.12/packages/aarch64_cortex-a53
+          mkdir -p files/etc/apk/keys files/etc/apk/repositories.d files/etc/honk-pkgs
+          curl -sSL -o files/etc/apk/keys/daeuniverse.pem https://openwrt.daeuniverse.org/public-key.pem
+          printf '@daeuniverse %s/packages.adb\n' "$BASE" > files/etc/apk/repositories.d/daeuniverse.list
+          for p in \
+            honk-0.1.0_beta6-r1 \
+            luci-app-honk-26.312.55253~546cb35 \
+            luci-lib-daeuniverse-26.314.80356~8110e50 \
+            luci-i18n-daeuniverse-zh-cn-26.314.80356~8110e50 \
+            vmlinux-btf-builtin-1-r1 ; do
+            curl -sSL -o "files/etc/honk-pkgs/$p.apk" "$BASE/$p.apk"
+          done
+          ls -lh files/etc/honk-pkgs/
 
       - name: Apply MBI RX overrun -> MAC epoch reset patch (pbs05/ponwrt#49)
         run: |
@@ -80,9 +86,8 @@ jobs:
           ./scripts/kconfig.pl + "configs/an7581.config" configs/release.config > .config
           # 只编 gemtek_xg2010g, 其余 an7581 设备全关 (省一半以上构建时间)
           sed -i -E '/gemtek_xg2010g/!s/^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_([A-Za-z0-9_.+-]+)=y$/# CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_\1 is not set/' .config
-          # ── honk（官方包：honk 核心 + LuCI 界面 + 共享库）──
-          for k in kmod-veth kmod-nft-queue kmod-nft-core kmod-nf-conntrack kmod-nfnetlink-queue \
-                   honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
+          # ── honk 依赖的 kmod（honk 本体走预置 apk，不参与本次编译）──
+          for k in kmod-veth kmod-nft-queue kmod-nft-core kmod-nf-conntrack kmod-nfnetlink-queue; do
             grep -q "^CONFIG_PACKAGE_$k=y" .config || echo "CONFIG_PACKAGE_$k=y" >> .config
             sed -i "s/^# CONFIG_PACKAGE_$k is not set$/CONFIG_PACKAGE_$k=y/" .config
           done
@@ -96,8 +101,9 @@ jobs:
           echo "── honk 与内核前提 ──"
           grep -E '^CONFIG_(KERNEL_CGROUP_BPF|KERNEL_NET_CLS_ACT|KERNEL_BPF_SYSCALL|KERNEL_BPF_JIT)=y$' .config
           grep -E '^CONFIG_PACKAGE_kmod-(veth|nft-queue|nft-core|nf-conntrack)=y$' .config || { echo "ERROR: honk 依赖 kmod 缺失"; exit 1; }
-          echo "── honk + LuCI 界面是否被选中 (必须有输出) ──"
-          grep -E '^CONFIG_PACKAGE_(honk|luci-app-honk|luci-lib-daeuniverse|luci-i18n-daeuniverse-zh-cn|vmlinux-btf-builtin)=y$' .config || { echo "ERROR: honk/LuCI 未被选中"; exit 1; }
+          echo "── 预置 apk 清单 ──"
+          ls -1 files/etc/honk-pkgs/ | sed 's/^/  /'
+          [ "$(ls -1 files/etc/honk-pkgs/*.apk | wc -l)" -ge 5 ] || { echo "ERROR: apk 未下载齐"; exit 1; }
           echo "── dae/daed 是否被选中 (不该有输出) ──"
           grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|daed|luci-app-dae|luci-app-daede)=y$' .config || echo "OK: dae/daed 全部关闭"
           echo "── dae 依赖是否保留 (应有输出) ──"
@@ -135,16 +141,11 @@ jobs:
           done
           echo "── airoha-xpon (应为 r69 = 带补丁) ──"
           grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
-          echo "── honk 包与 LuCI 界面 ──"
-          for p in honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
-            grep -qE "^$p[[:space:]]" "$man" && echo "  OK   $p" || { echo "  MISS $p"; exit 1; }
-          done
-          BIN=$(ls -1 build_dir/target-*/root-*/usr/bin/honk-core 2>/dev/null | head -1)
-          if [ -n "$BIN" ]; then echo "  OK $BIN ($(stat -c%s "$BIN") bytes)"; else echo "ERROR: rootfs 里没有 honk-core"; exit 1; fi
-          for f in etc/init.d/honk etc/config/honk etc/honk/config.dae www/luci-static/resources/view/honk/main.js usr/share/luci/menu.d/luci-app-honk.json; do
-            R=$(ls -1 build_dir/target-*/root-*/$f 2>/dev/null | head -1)
-            [ -n "$R" ] && echo "  OK   /$f" || { echo "  MISS /$f"; exit 1; }
-          done
+          echo "── 预置 apk（首启离线安装）──"
+          N=$(ls -1 build_dir/target-*/root-*/etc/honk-pkgs/*.apk 2>/dev/null | wc -l)
+          echo "  预置 apk: $N 个 (应为 5)"
+          [ "$N" -ge 5 ] || { echo "ERROR: apk 没进 rootfs"; exit 1; }
+          ls -l build_dir/target-*/root-*/etc/apk/keys/daeuniverse.pem >/dev/null 2>&1 || { echo "ERROR: 签名公钥缺失"; exit 1; }
           grep -E "^kmod-(veth|nft-queue|nft-core|nf-conntrack)[[:space:]]" "$man" || { echo "ERROR: honk 依赖缺失"; exit 1; }
           echo "── adguardhome ──"; grep -E "^(adguardhome|luci-app-adguardhome) " "$man" || echo "MISSING adguardhome!"
           echo "── PHY fw ──"; grep -E "^(airoha-en8811h-firmware|rtl826x-firmware|rtl8261c-firmware) " "$man" || echo "MISSING PHY fw!"
