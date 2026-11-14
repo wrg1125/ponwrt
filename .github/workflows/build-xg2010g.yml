@@ -93,6 +93,11 @@ jobs:
           HONK_NODE: ${{ secrets.HONK_NODE }}
         run: bash scripts/wrg1125-inject.sh
 
+      - name: DEBUG honk prepare
+        run: |
+          make package/honk/download V=s 2>&1 | tail -25 || true
+          make package/honk/prepare V=s 2>&1 | tail -60 || true
+
       - name: Download sources
         run: make download -j"$(nproc)"
 
