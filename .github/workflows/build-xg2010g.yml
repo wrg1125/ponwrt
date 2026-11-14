@@ -53,6 +53,17 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Use prebuilt honk package (skip Rust source build)
+        run: |
+          set -e
+          test -d feeds/daeuniverse/honk
+          cp build/daeuniverse-honk-prebuilt.mk feeds/daeuniverse/honk/Makefile
+          echo "── honk Makefile 关键行 ──"
+          grep -E '^(PKG_HASH|PKG_SOURCE):=' feeds/daeuniverse/honk/Makefile
+          grep -n 'vmlinux-btf-builtin' feeds/daeuniverse/honk/Makefile
+          rm -rf package/feeds/daeuniverse/honk
+          ./scripts/feeds install honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin
+
       - name: Apply MBI RX overrun -> MAC epoch reset patch (pbs05/ponwrt#49)
         run: |
           set -e
@@ -69,9 +80,11 @@ jobs:
           ./scripts/kconfig.pl + "configs/an7581.config" configs/release.config > .config
           # 只编 gemtek_xg2010g, 其余 an7581 设备全关 (省一半以上构建时间)
           sed -i -E '/gemtek_xg2010g/!s/^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_([A-Za-z0-9_.+-]+)=y$/# CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_\1 is not set/' .config
-          # ── honk（二进制走 files/ 覆盖层，不用 package 机制）──
-          for k in kmod-veth kmod-nft-queue kmod-nft-core kmod-nf-conntrack; do
+          # ── honk（官方包：honk 核心 + LuCI 界面 + 共享库）──
+          for k in kmod-veth kmod-nft-queue kmod-nft-core kmod-nf-conntrack kmod-nfnetlink-queue \
+                   honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
             grep -q "^CONFIG_PACKAGE_$k=y" .config || echo "CONFIG_PACKAGE_$k=y" >> .config
+            sed -i "s/^# CONFIG_PACKAGE_$k is not set$/CONFIG_PACKAGE_$k=y/" .config
           done
           # honk 需要 cgroup v2 + CGROUP_BPF；NET_XGRESS 由 NET_CLS_ACT 自动选中
           sed -i 's/^# CONFIG_KERNEL_CGROUP_BPF is not set/CONFIG_KERNEL_CGROUP_BPF=y/' .config
@@ -83,6 +96,8 @@ jobs:
           echo "── honk 与内核前提 ──"
           grep -E '^CONFIG_(KERNEL_CGROUP_BPF|KERNEL_NET_CLS_ACT|KERNEL_BPF_SYSCALL|KERNEL_BPF_JIT)=y$' .config
           grep -E '^CONFIG_PACKAGE_kmod-(veth|nft-queue|nft-core|nf-conntrack)=y$' .config || { echo "ERROR: honk 依赖 kmod 缺失"; exit 1; }
+          echo "── honk + LuCI 界面是否被选中 (必须有输出) ──"
+          grep -E '^CONFIG_PACKAGE_(honk|luci-app-honk|luci-lib-daeuniverse|luci-i18n-daeuniverse-zh-cn|vmlinux-btf-builtin)=y$' .config || { echo "ERROR: honk/LuCI 未被选中"; exit 1; }
           echo "── dae/daed 是否被选中 (不该有输出) ──"
           grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|daed|luci-app-dae|luci-app-daede)=y$' .config || echo "OK: dae/daed 全部关闭"
           echo "── dae 依赖是否保留 (应有输出) ──"
@@ -95,18 +110,6 @@ jobs:
           ROOT_HASH: ${{ secrets.ROOT_HASH }}
           HONK_NODE: ${{ secrets.HONK_NODE }}
         run: bash scripts/wrg1125-inject.sh
-
-      - name: Fetch honk binary into files/ overlay
-        run: |
-          set -e
-          URL="https://github.com/daeuniverse/honk/releases/download/v0.1.0-beta.6/honk-core-v0.1.0-beta.6-aarch64-unknown-linux-musl-stock-clash-api.tar.gz"
-          curl -sSL -o /tmp/honk.tgz "$URL"
-          echo "e33320460ed1cda83b21cfc3a0551769a1a250c0aeeda5824e92f18d322fb69e  /tmp/honk.tgz" | sha256sum -c -
-          mkdir -p files/usr/bin
-          tar -C /tmp -xzf /tmp/honk.tgz
-          install -Dm755 /tmp/honk-core-v0.1.0-beta.6-aarch64-unknown-linux-musl-stock-clash-api/honk-core files/usr/bin/honk
-          ls -lh files/usr/bin/honk
-          file files/usr/bin/honk | head -1
 
       - name: Download sources
         run: make download -j"$(nproc)"
@@ -132,9 +135,16 @@ jobs:
           done
           echo "── airoha-xpon (应为 r69 = 带补丁) ──"
           grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
-          echo "── honk 二进制 (files/ 覆盖层，不在 manifest 里) ──"
-          BIN=$(ls -1 build_dir/target-*/root-*/usr/bin/honk 2>/dev/null | head -1)
-          if [ -n "$BIN" ]; then echo "  OK $BIN ($(stat -c%s "$BIN") bytes)"; else echo "ERROR: rootfs 里没有 honk"; exit 1; fi
+          echo "── honk 包与 LuCI 界面 ──"
+          for p in honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
+            grep -qE "^$p[[:space:]]" "$man" && echo "  OK   $p" || { echo "  MISS $p"; exit 1; }
+          done
+          BIN=$(ls -1 build_dir/target-*/root-*/usr/bin/honk-core 2>/dev/null | head -1)
+          if [ -n "$BIN" ]; then echo "  OK $BIN ($(stat -c%s "$BIN") bytes)"; else echo "ERROR: rootfs 里没有 honk-core"; exit 1; fi
+          for f in etc/init.d/honk etc/config/honk etc/honk/config.dae www/luci-static/resources/view/honk/main.js usr/share/luci/menu.d/luci-app-honk.json; do
+            R=$(ls -1 build_dir/target-*/root-*/$f 2>/dev/null | head -1)
+            [ -n "$R" ] && echo "  OK   /$f" || { echo "  MISS /$f"; exit 1; }
+          done
           grep -E "^kmod-(veth|nft-queue|nft-core|nf-conntrack)[[:space:]]" "$man" || { echo "ERROR: honk 依赖缺失"; exit 1; }
           echo "── adguardhome ──"; grep -E "^(adguardhome|luci-app-adguardhome) " "$man" || echo "MISSING adguardhome!"
           echo "── PHY fw ──"; grep -E "^(airoha-en8811h-firmware|rtl826x-firmware|rtl8261c-firmware) " "$man" || echo "MISSING PHY fw!"
