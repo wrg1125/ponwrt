@@ -29,8 +29,9 @@ include $(INCLUDE_DIR)/package.mk
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/honk-prebuilt-$(PKG_VERSION)
 
-# release 包内层目录名带架构后缀，一律剥掉，落到 PKG_BUILD_DIR 根下
-PKG_UNPACK:=mkdir -p $(PKG_BUILD_DIR) && tar -C $(PKG_BUILD_DIR) --strip-components=1 -xzf $(DL_DIR)/$(PKG_SOURCE)
+# 解包交给 Build/Prepare 显式处理：不同 OpenWrt 版本对 PKG_UNPACK 的处理不一致
+# （v1 就栽在这：二进制被多套一层目录，install 找不到 honk-core，0.5 秒即失败）
+PKG_UNPACK:=
 
 define Package/honk
   SECTION:=net
@@ -50,6 +51,20 @@ define Package/honk/description
  prebuilt release binary (aarch64 musl full build: Clash API, native API and the
  embedded doona dashboard served at /ui on the native API listener) instead of
  building the Rust sources in-tree.
+endef
+
+define Build/Prepare
+	rm -rf $(PKG_BUILD_DIR)
+	mkdir -p $(PKG_BUILD_DIR)
+	tar -C $(PKG_BUILD_DIR) --strip-components=1 -xzf $(DL_DIR)/$(PKG_SOURCE)
+	@echo "==== honk release 解包结果 ===="
+	@ls -la $(PKG_BUILD_DIR) || true
+	@test -f $(PKG_BUILD_DIR)/honk-core || { \
+		echo "ERROR: honk-core 不在 $(PKG_BUILD_DIR) 根下，全部内容："; \
+		find $(PKG_BUILD_DIR) -maxdepth 3; exit 1; }
+	@for f in honk.init honk.config honk.uci-defaults config.dae; do \
+		test -f $(PKG_DIR)/files/$$f || { echo "ERROR: 缺 $(PKG_DIR)/files/$$f"; exit 1; }; \
+	done
 endef
 
 define Build/Compile
