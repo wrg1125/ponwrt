@@ -71,6 +71,8 @@ jobs:
           sed -i -E '/gemtek_xg2010g/!s/^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_([A-Za-z0-9_.+-]+)=y$/# CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_\1 is not set/' .config
           # ── dae（本体 + LuCI 面板）与其 eBPF 依赖；honk 一律不进镜像 ──
           for k in dae dae-geoip dae-geosite luci-app-dae \
+                   vlmcsd luci-app-vlmcsd luci-app-wol etherwake \
+                   adguardhome luci-app-adguardhome \
                    kmod-sched-core kmod-sched-bpf kmod-veth kmod-inet-diag \
                    kmod-netlink-diag kmod-xdp-sockets-diag \
                    v2ray-geoip v2ray-geosite ca-bundle; do
@@ -88,8 +90,8 @@ jobs:
           make defconfig
           echo "── 本次构建的设备 ──"
           grep -E '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_[A-Za-z0-9_.+-]+=y$' .config
-          echo "── dae + LuCI 面板是否被选中 (必须有输出) ──"
-          grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|luci-app-dae)=y$' .config || { echo "ERROR: dae 未被选中"; exit 1; }
+          echo "── dae / vlmcsd / wol / adguardhome 是否被选中 (必须有输出) ──"
+          grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|luci-app-dae|vlmcsd|luci-app-vlmcsd|luci-app-wol|etherwake|adguardhome|luci-app-adguardhome)=y$' .config || { echo "ERROR: 目标插件未被选中"; exit 1; }
           echo "── honk 必须全部关掉 (不该有输出) ──"
           grep -E '^CONFIG_PACKAGE_(honk|luci-app-honk|luci-lib-daeuniverse|vmlinux-btf-builtin)=y$' .config && { echo "ERROR: honk 相关包仍在 .config 里"; exit 1; } || echo "OK: honk 全关"
           echo "── dae 依赖与内核前提 (应有输出) ──"
@@ -115,8 +117,8 @@ jobs:
           [ -n "$man" ] || man=$(find bin/targets/airoha/an7581 -name '*.manifest' | head -1)
           [ -n "$man" ] || { echo "manifest not found"; find bin/targets -maxdepth 3 | head -30; exit 1; }
           echo "使用 manifest: $man"
-          echo "── dae 本体与面板 (本版必须存在) ──"
-          for p in dae dae-geoip dae-geosite luci-app-dae; do
+          echo "── dae / vlmcsd / wol / adguardhome (本版必须存在) ──"
+          for p in dae dae-geoip dae-geosite luci-app-dae vlmcsd luci-app-vlmcsd luci-app-wol etherwake adguardhome luci-app-adguardhome; do
             grep -qE "^$p[[:space:]]" "$man" && echo "  OK   $p" || { echo "  MISS $p"; exit 1; }
           done
           echo "── honk 必须不在镜像里 ──"
@@ -136,7 +138,6 @@ jobs:
           done
           echo "── airoha-xpon (应为 r69 = 带补丁) ──"
           grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
-          echo "── adguardhome ──"; grep -E "^(adguardhome|luci-app-adguardhome) " "$man" || echo "MISSING adguardhome!"
           echo "── PHY fw ──"; grep -E "^(airoha-en8811h-firmware|rtl826x-firmware|rtl8261c-firmware) " "$man" || echo "MISSING PHY fw!"
           echo "── PON ──";  grep -E "^(kmod-airoha-xpon|airoha-pon|luci-app-pon)" "$man" || echo "MISSING PON!"
 
