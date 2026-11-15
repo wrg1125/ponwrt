@@ -1,5 +1,0 @@
-#!/bin/sh
-# 首次启动时把 honk 设为开机自启（官方 honk 包默认不自启）。
-# 节点与分流规则在 LuCI「服务 → honk」或 doona 面板 (http://<路由器IP>:9527/) 里配。
-/etc/init.d/honk enable
-exit 0
