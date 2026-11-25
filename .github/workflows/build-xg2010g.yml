@@ -1,0 +1,158 @@
+name: Build XG2010G (wrg1125 custom)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xg2010g-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build an7581
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+            gettext git g++-multilib gcc-multilib gperf help2man intltool \
+            libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+            libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+            python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: ponwrt-dl-an7581-${{ hashFiles('feeds.conf.default', 'configs/*.config') }}
+          restore-keys: |
+            ponwrt-dl-an7581-
+
+      - name: Install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Apply MBI RX overrun -> MAC epoch reset patch (pbs05/ponwrt#49)
+        run: |
+          set -e
+          cd feeds/pon_drivers/airoha-xpon
+          ( cd src && git apply -p1 --verbose "$GITHUB_WORKSPACE/build/mbi-reset.patch" )
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=69/" Makefile
+          echo "── PKG_RELEASE ──"; grep '^PKG_RELEASE' Makefile
+          echo "── 补丁标记 (应为 2 / 1) ──"
+          grep -c mbi_reset_pending src/airoha-xpon-private.h
+          grep -c 'MBI RX overrun storm' src/airoha-xpon-main.c
+
+      - name: Configure an7581
+        run: |
+          ./scripts/kconfig.pl + "configs/an7581.config" configs/release.config > .config
+          # 只编 gemtek_xg2010g, 其余 an7581 设备全关 (省一半以上构建时间)
+          sed -i -E '/gemtek_xg2010g/!s/^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_([A-Za-z0-9_.+-]+)=y$/# CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_\1 is not set/' .config
+          # ── dae（本体 + LuCI 面板）与其 eBPF 依赖；honk 一律不进镜像 ──
+          for k in dae dae-geoip dae-geosite luci-app-dae \
+                   vlmcsd luci-app-vlmcsd luci-app-wol etherwake \
+                   adguardhome luci-app-adguardhome \
+                   kmod-sched-core kmod-sched-bpf kmod-veth kmod-inet-diag \
+                   kmod-netlink-diag kmod-xdp-sockets-diag \
+                   v2ray-geoip v2ray-geosite ca-bundle; do
+            sed -i "s/^# CONFIG_PACKAGE_$k is not set$/CONFIG_PACKAGE_$k=y/" .config
+            grep -q "^CONFIG_PACKAGE_$k=y" .config || echo "CONFIG_PACKAGE_$k=y" >> .config
+          done
+          # honk 时代遗留的包必须关掉（没有 honk 的依赖包，也没有 honk 本体）
+          for k in honk luci-app-honk luci-lib-daeuniverse luci-i18n-daeuniverse-zh-cn vmlinux-btf-builtin; do
+            sed -i "s/^CONFIG_PACKAGE_$k=y$/# CONFIG_PACKAGE_$k is not set/" .config
+          done
+          # dae 的 eBPF 需要 BPF/XDP 内核开关；NET_CLS_ACT 供 tproxy 使用
+          sed -i 's/^# CONFIG_KERNEL_CGROUP_BPF is not set/CONFIG_KERNEL_CGROUP_BPF=y/' .config
+          grep -q '^CONFIG_KERNEL_CGROUP_BPF=' .config || echo 'CONFIG_KERNEL_CGROUP_BPF=y' >> .config
+          grep -q '^CONFIG_KERNEL_NET_CLS_ACT=' .config || echo 'CONFIG_KERNEL_NET_CLS_ACT=y' >> .config
+          make defconfig
+          echo "── 本次构建的设备 ──"
+          grep -E '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_[A-Za-z0-9_.+-]+=y$' .config
+          echo "── dae / vlmcsd / wol / adguardhome 是否被选中 (必须有输出) ──"
+          grep -E '^CONFIG_PACKAGE_(dae|dae-geoip|dae-geosite|luci-app-dae|vlmcsd|luci-app-vlmcsd|luci-app-wol|etherwake|adguardhome|luci-app-adguardhome)=y$' .config || { echo "ERROR: 目标插件未被选中"; exit 1; }
+          echo "── honk 必须全部关掉 (不该有输出) ──"
+          grep -E '^CONFIG_PACKAGE_(honk|luci-app-honk|luci-lib-daeuniverse|vmlinux-btf-builtin)=y$' .config && { echo "ERROR: honk 相关包仍在 .config 里"; exit 1; } || echo "OK: honk 全关"
+          echo "── dae 依赖与内核前提 (应有输出) ──"
+          grep -E '^CONFIG_(PACKAGE_(kmod-sched-core|kmod-sched-bpf|kmod-veth|kmod-inet-diag|kmod-netlink-diag|kmod-xdp-sockets-diag|v2ray-geoip|v2ray-geosite|ca-bundle)|KERNEL_(XDP_SOCKETS|XDP_SOCKETS_DIAG|BPF_SYSCALL|BPF_JIT|BPF_EVENTS|DEBUG_INFO_BTF))=y$' .config || { echo "ERROR: dae 依赖缺失"; exit 1; }
+
+      - name: Inject personalization from secrets
+        env:
+          PPPoE_USER: ${{ secrets.PPPOE_USER }}
+          PPPoE_PASS: ${{ secrets.PPPOE_PASS }}
+          ROOT_HASH: ${{ secrets.ROOT_HASH }}
+          HONK_NODE: ${{ secrets.HONK_NODE }}
+        run: bash scripts/wrg1125-inject.sh
+
+      - name: Download sources
+        run: make download -j"$(nproc)"
+
+      - name: Build an7581
+        run: make -j"$(nproc)"
+
+      - name: Verify custom packages in manifest (xg2010g)
+        run: |
+          man=$(find bin/targets/airoha/an7581 -name '*gemtek_xg2010g*.manifest' | head -1)
+          [ -n "$man" ] || man=$(find bin/targets/airoha/an7581 -name '*.manifest' | head -1)
+          [ -n "$man" ] || { echo "manifest not found"; find bin/targets -maxdepth 3 | head -30; exit 1; }
+          echo "使用 manifest: $man"
+          echo "── dae / vlmcsd / wol / adguardhome (本版必须存在) ──"
+          for p in dae dae-geoip dae-geosite luci-app-dae vlmcsd luci-app-vlmcsd luci-app-wol etherwake adguardhome luci-app-adguardhome; do
+            grep -qE "^$p[[:space:]]" "$man" && echo "  OK   $p" || { echo "  MISS $p"; exit 1; }
+          done
+          echo "── honk 必须不在镜像里 ──"
+          if grep -qE "^(honk|luci-app-honk|luci-lib-daeuniverse|vmlinux-btf-builtin)[[:space:]]" "$man"; then
+            echo "ERROR: honk 相关包仍在镜像里"; exit 1
+          else
+            echo "OK: honk 未安装"
+          fi
+          echo "── dae 依赖 (本版必须存在) ──"
+          for p in kmod-sched-core kmod-sched-bpf kmod-veth kmod-inet-diag kmod-netlink-diag kmod-xdp-sockets-diag v2ray-geoip v2ray-geosite ca-bundle; do
+            grep -qE "^$p[[:space:]]" "$man" && echo "  OK   $p" || { echo "  MISS $p"; exit 1; }
+          done
+          echo "── dae 二进制与配置是否落进 rootfs ──"
+          for f in usr/bin/dae etc/init.d/dae etc/config/dae; do
+            R=$(ls -1 build_dir/target-*/root-*/$f 2>/dev/null | head -1)
+            [ -n "$R" ] && echo "  OK   /$f" || { echo "  MISS /$f"; exit 1; }
+          done
+          echo "── airoha-xpon (应为 r69 = 带补丁) ──"
+          grep -E "^kmod-airoha-xpon[[:space:]]" "$man" || { echo "MISSING kmod-airoha-xpon"; exit 1; }
+          echo "── PHY fw ──"; grep -E "^(airoha-en8811h-firmware|rtl826x-firmware|rtl8261c-firmware) " "$man" || echo "MISSING PHY fw!"
+          echo "── PON ──";  grep -E "^(kmod-airoha-xpon|airoha-pon|luci-app-pon)" "$man" || echo "MISSING PON!"
+
+      - name: Pack xg2010g images
+        run: |
+          mkdir -p release
+          find bin/targets/airoha/an7581 -name '*gemtek_xg2010g*' -type f -exec cp -t release/ {} +
+          find bin/targets/airoha/an7581 -name 'sha256sums' -exec cp -t release/ {} +
+          [ -n "$(ls -A release)" ] || { echo "no xg2010g files"; find bin/targets -maxdepth 3 | head -30; exit 1; }
+          ls -la release/
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponwrt-xg2010g-images
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
